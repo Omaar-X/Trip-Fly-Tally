@@ -1,6 +1,6 @@
 import axios, { AxiosError } from 'axios';
 
-const baseURL = import.meta.env.VITE_API_URL || '';
+const baseURL = (import.meta.env.VITE_API_URL || '').trim().replace(/\/$/, '');
 export const api = axios.create({ baseURL, timeout: 30000 });
 
 /** Storage can be unavailable in privacy-mode/embedded browser contexts. */
@@ -67,6 +67,12 @@ export function apiErrorMessage(err: unknown): string {
   const e = err as AxiosError<{ message?: string; errors?: { field?: string; path?: string; message: string }[] }>;
   if (e.response?.data?.errors?.length)
     return e.response.data.errors.map((x) => `${x.field ?? x.path ?? 'field'}: ${x.message}`).join(', ');
+  if (e.code === 'ECONNABORTED') return 'Server response নিতে বেশি সময় লাগছে। কিছুক্ষণ পর আবার চেষ্টা করুন।';
+  if (e.isAxiosError && !e.response) {
+    return navigator.onLine
+      ? 'Server-এর সাথে সংযোগ হচ্ছে না। কিছুক্ষণ পর আবার চেষ্টা করুন।'
+      : 'Internet connection নেই। সংযোগ ঠিক করে আবার চেষ্টা করুন।';
+  }
   return e.response?.data?.message ?? e.message ?? 'Something went wrong';
 }
 

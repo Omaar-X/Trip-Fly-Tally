@@ -8,7 +8,7 @@ export const corsOptions: CorsOptions = {
   credentials: true,
   origin(origin, callback) {
     if (!origin) return callback(null, true);
-    if (env.corsOrigins.includes(origin)) return callback(null, true);
+    if (env.corsOrigins.includes(origin.replace(/\/$/, ''))) return callback(null, true);
     return callback(ApiError.forbidden(`CORS origin not allowed: ${origin}`));
   },
 };

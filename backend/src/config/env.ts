@@ -53,7 +53,7 @@ const numberFromEnv = (key: string, fallback: string, min = 0): number => {
 };
 
 const splitList = (value: string): string[] =>
-  value.split(',').map((item) => item.trim()).filter(Boolean);
+  value.split(',').map((item) => item.trim().replace(/\/$/, '')).filter(Boolean);
 
 const appSlug = (process.env.APP_SLUG ?? 'erp').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-') || 'erp';
 

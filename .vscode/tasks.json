@@ -1,0 +1,53 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Trip Fly: Start MySQL",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\start-mysql.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Trip Fly: Backend Dev",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$env:Path='C:\\Program Files\\nodejs;'+$env:Path; & 'C:\\Program Files\\nodejs\\npm.cmd' run dev"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\backend"
+      },
+      "dependsOn": [
+        "Trip Fly: Start MySQL"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Trip Fly: Frontend Dev",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$env:Path='C:\\Program Files\\nodejs;'+$env:Path; & 'C:\\Program Files\\nodejs\\npm.cmd' run dev"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}\\frontend"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

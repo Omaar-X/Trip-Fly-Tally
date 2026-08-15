@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.log
+*.tsbuildinfo
+
+# Local database dumps (audit trails, exports) — real data, never commit.
+backups/
+*.dump.sql

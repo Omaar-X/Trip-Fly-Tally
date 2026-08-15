@@ -32,6 +32,7 @@ const { app, pool, reachable } = await (async () => {
     conn.release();
     return { app, pool, reachable: true };
   } catch (err) {
+    if (process.env.REQUIRE_INTEGRATION_DB === 'true') throw err;
     console.warn('[integration] no database reachable — skipping:', (err as Error).message);
     return { app: null as any, pool: null as any, reachable: false };
   }

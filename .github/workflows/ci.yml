@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      NODE_ENV: test
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: erp_test
+      JWT_ACCESS_SECRET: ci_access_secret_at_least_32_chars_long
+      JWT_REFRESH_SECRET: ci_refresh_secret_at_least_32_chars_long
+      INTEGRATION_CEO_EMAIL: ci-ceo@example.com
+      INTEGRATION_CEO_PASSWORD: CI-only-password-123!
+      REQUIRE_INTEGRATION_DB: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+      - run: npm ci --prefix backend
+      - run: npm ci --prefix frontend
+      - name: Initialize integration database
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const mysql = require('./backend/node_modules/mysql2/promise');
+          const bcrypt = require('./backend/node_modules/bcryptjs');
+          (async () => {
+            const db = await mysql.createConnection({
+              host: '127.0.0.1', user: 'root', password: 'root', multipleStatements: true
+            });
+            await db.query('CREATE DATABASE erp_test');
+            await db.query('USE erp_test');
+            await db.query(fs.readFileSync('database/schema.sql', 'utf8'));
+            await db.query(fs.readFileSync('database/seed.sql', 'utf8'));
+            const hash = await bcrypt.hash(process.env.INTEGRATION_CEO_PASSWORD, 10);
+            await db.query(
+              'UPDATE users SET email = ?, password_hash = ? WHERE id = 1',
+              [process.env.INTEGRATION_CEO_EMAIL, hash]
+            );
+            await db.end();
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
+      - run: npm run typecheck --prefix backend
+      - run: npm test --prefix backend
+      - run: npm run test:integration --prefix backend
+      - run: npm run typecheck --prefix frontend
+      - run: npm test --prefix frontend

@@ -149,9 +149,9 @@ async function stockOnHandTx(
  * Locking read for the same reason as stockOnHandTx: costing an issue against
  * a stale snapshot would book it at an average that no longer exists.
  */
-async function weightedAverageCostTx(
+async function weightedAveragePositionTx(
   conn: PoolConnection, companyId: number, itemId: number
-): Promise<number> {
+): Promise<{ quantity: number; value: number }> {
   const [rows] = await conn.query<Row[]>(
     `SELECT COALESCE(SUM(CASE WHEN entry_type='IN' THEN quantity ELSE -quantity END), 0) AS qty,
             COALESCE(SUM(CASE WHEN entry_type='IN' THEN value_amount ELSE -value_amount END), 0) AS value
@@ -159,9 +159,31 @@ async function weightedAverageCostTx(
         FOR UPDATE`,
     [companyId, itemId]);
 
-  const qty = Number(rows[0]?.qty ?? 0);
-  const value = Number(rows[0]?.value ?? 0);
-  return qty > 0 ? round2(value / qty) : 0;
+  return {
+    quantity: round3(Number(rows[0]?.qty ?? 0)),
+    value: round2(Number(rows[0]?.value ?? 0)),
+  };
+}
+
+/**
+ * Values an issue without letting a rounded unit rate create a residual.
+ * `value` is the accounting truth; `unitCost` is a two-decimal display rate.
+ * The final issue consumes the exact remaining value, so zero quantity can
+ * never leave Stock-in-Hand at +/- one paisa after repeated average rounding.
+ */
+export function valueWeightedAverageIssue(
+  position: { quantity: number; value: number }, issueQuantity: number
+): { unitCost: number; value: number } {
+  const quantity = round3(position.quantity);
+  const stockValue = round2(position.value);
+  const issue = round3(issueQuantity);
+  if (!(quantity > 0) || !(stockValue > 0) || !(issue > 0) || issue > quantity)
+    return { unitCost: 0, value: 0 };
+
+  const value = issue === quantity
+    ? stockValue
+    : round2(issue * stockValue / quantity);
+  return { unitCost: round2(stockValue / quantity), value };
 }
 
 /** Posts the ledger half of a stock movement. */
@@ -352,6 +374,7 @@ export const inventoryService = {
       const warehouse = await assertWarehouseUsableTx(conn, companyId, input.warehouseId);
 
       let unitCost = round2(input.rate);
+      let value: number;
       if (input.type === 'OUT') {
         // Stock is checked IN THIS WAREHOUSE. The old check summed every
         // warehouse, so goods could be issued from a store that held none as
@@ -361,10 +384,12 @@ export const inventoryService = {
           throw ApiError.badRequest(
             `Insufficient stock of "${item.name}" in ${warehouse.name}: ` +
             `${onHand} ${item.unit} available, ${quantity} requested`);
-        unitCost = await weightedAverageCostTx(conn, companyId, input.itemId);
+        const position = await weightedAveragePositionTx(conn, companyId, input.itemId);
+        ({ unitCost, value } = valueWeightedAverageIssue(position, quantity));
+      } else {
+        value = round2(quantity * unitCost);
       }
 
-      const value = round2(quantity * unitCost);
       if (!(value > 0))
         throw ApiError.badRequest(
           input.type === 'IN'

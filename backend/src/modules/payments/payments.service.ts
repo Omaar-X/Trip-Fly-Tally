@@ -3,7 +3,7 @@ import { query, withTransaction, Row, WriteResult } from '../../config/db';
 import { ApiError } from '../../utils/ApiError';
 import { round2 } from '../../utils/money';
 import { nextDocNo, paymentDocPrefix } from '../../utils/numbering';
-import { findLedgerId, moneyLedgerName } from '../../utils/systemLedgers';
+import { resolveMoneyLedgerId } from '../../utils/systemLedgers';
 import { postVoucherTx } from '../accounting/accounting.service';
 import { financialYearOf, loadBooksPolicyTx } from '../accounting/fiscalPeriod.service';
 import { financialReversalService } from '../accounting/reversal.service';
@@ -34,6 +34,11 @@ export interface RecordPaymentInput {
   invoiceId?: number;      // settle (IN) or unsettle (OUT) a specific invoice
   refundOfPaymentId?: number;
   method: PaymentMethod;
+  /**
+   * Which cash/bank ledger the money moves through. Optional: without it the
+   * method's default account is used, which is all a single-bank company needs.
+   */
+  moneyLedgerId?: number;
   amount: number;
   paymentDate: string;     // YYYY-MM-DD
   notes?: string;
@@ -115,7 +120,7 @@ export const paymentsService = {
 
     return withTransaction(async (conn) => {
       const policy = await loadBooksPolicyTx(conn, companyId);
-      const moneyLedgerId = await findLedgerId(conn, companyId, moneyLedgerName(input.method));
+      const moneyLedgerId = await resolveMoneyLedgerId(conn, companyId, input.method, input.moneyLedgerId);
       const party = await partyRow(conn, counterparty.type, companyId, counterparty.id);
       const partyLedgerId = Number(party.ledger_id);
 

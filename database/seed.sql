@@ -75,7 +75,15 @@ INSERT INTO ledger_groups (id, company_id, parent_id, name, nature, sort_order) 
   -- Expenses
   (14, 1, NULL, 'Expenses',               'EXPENSE',   5),
   (15, 1, 14,   'Direct Expenses',        'EXPENSE',   1),
-  (16, 1, 14,   'Indirect Expenses',      'EXPENSE',   2);
+  (16, 1, 14,   'Indirect Expenses',      'EXPENSE',   2),
+  -- A drawing reduces capital; it is not a cost of trading. Booking owner
+  -- withdrawals under Expenses understates profit — in this company's own
+  -- history, by BDT 250k-330k in a typical month.
+  (17, 1, 11,   'Owner / CEO Drawings',   'EQUITY',    2),
+  -- ADM (airline debit memo) and VOID (cancellation charge) are one nature and
+  -- two ledgers: "what did ADMs cost us" and "what did voids cost us" are
+  -- different questions, and a merged ledger answers neither.
+  (18, 1, 14,   'Airline Penalty & Loss', 'EXPENSE',   3);
 
 -- System ledgers — required by name for the accounting engine to post
 -- payments/bookings/payroll vouchers. Zero opening balance (empty template).
@@ -100,7 +108,17 @@ INSERT INTO ledgers (id, company_id, group_id, name, opening_balance, opening_ty
   -- Balance Sheet carries real closing stock and the P&L a real cost of goods.
   (14, 1, 6,  'Stock in Hand',           0.00, 'DR', 1),
   (15, 1, 15, 'Cost of Goods Sold',      0.00, 'DR', 1),
-  (16, 1, 15, 'Stock Adjustment',        0.00, 'DR', 1);
+  (16, 1, 15, 'Stock Adjustment',        0.00, 'DR', 1),
+  -- A second bank. is_system = 0 on purpose: nothing in the code resolves this
+  -- one by name, so the company is free to rename it to its real account
+  -- number or retire it, which a system ledger would refuse.
+  (17, 1, 4,  'BRAC Bank',               0.00, 'DR', 0),
+  -- NOT a default destination. The historical importer posts here only where
+  -- the source clearly shows an owner withdrawal; anything unclear becomes a
+  -- REVIEW_REQUIRED item rather than a drawing.
+  (18, 1, 17, 'CEO Drawings',            0.00, 'DR', 1),
+  (19, 1, 18, 'ADM - Airline Debit Memo', 0.00, 'DR', 1),
+  (20, 1, 18, 'VOID - Ticket Void Charge', 0.00, 'DR', 1);
 
 -- Default warehouse — every stock movement needs a warehouse_id, so shipping
 -- zero warehouses would leave the inventory module unusable on a fresh install.

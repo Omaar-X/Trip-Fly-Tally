@@ -4,7 +4,8 @@ import { api, apiErrorMessage, openPdf } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { useServerList } from '../../lib/useServerList';
 import { useCompanySettings } from '../../context/CompanySettingsContext';
-import { Badge, Column, DataTable, ErrorNote, Field, Modal, Money, PageHeader, statusTone } from '../../components/ui';
+import { Badge, Column, DataTable, ErrorNote, Field, Modal, Money, PageHeader, SearchSelect, statusTone } from '../../components/ui';
+import { CustomerSearchSelect } from '../../components/EntitySearchSelect';
 import { bdt, fmtDate, today } from '../../lib/format';
 import { hasAnyRole, ROLE } from '../../lib/roles';
 
@@ -19,7 +20,6 @@ interface InvoiceDetail extends InvoiceRow {
   items: { description: string; quantity: string; rate: string; amount: string }[];
   payments: { payment_no: string; method: string; amount: string; payment_date: string }[];
 }
-interface Lookup { id: number; name: string }
 interface LedgerOpt { id: number; name: string; nature: string }
 
 export default function Invoices() {
@@ -140,7 +140,6 @@ interface LineDraft { description: string; quantity: string; rate: string }
 
 function ManualInvoiceModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
   const { company } = useCompanySettings();
-  const [customers, setCustomers] = useState<Lookup[]>([]);
   const [incomeLedgers, setIncomeLedgers] = useState<LedgerOpt[]>([]);
   const [form, setForm] = useState({ customerId: '', invoiceDate: today(), dueDate: '', incomeLedgerId: '', discount: '0', vatPercent: '5' });
   const [lines, setLines] = useState<LineDraft[]>([{ description: '', quantity: '1', rate: '' }]);
@@ -149,7 +148,6 @@ function ManualInvoiceModal({ open, onClose, onDone }: { open: boolean; onClose:
 
   useEffect(() => {
     if (!open) return;
-    api.get('/api/crm/customers').then((r) => setCustomers(r.data.data));
     api.get('/api/ledgers').then((r) =>
       setIncomeLedgers((r.data.data as LedgerOpt[]).filter((l) => l.nature === 'INCOME')));
   }, [open]);
@@ -199,16 +197,14 @@ function ManualInvoiceModal({ open, onClose, onDone }: { open: boolean; onClose:
       <form onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <Field label="Customer">
-            <select className="input" value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })} required>
-              <option value="">Select customer…</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <CustomerSearchSelect required
+              value={form.customerId ? Number(form.customerId) : ''}
+              onChange={(v) => setForm({ ...form, customerId: v === '' ? '' : String(v) })} />
           </Field>
           <Field label="Income ledger" hint="Which sales account this revenue belongs to">
-            <select className="input" value={form.incomeLedgerId} onChange={(e) => setForm({ ...form, incomeLedgerId: e.target.value })} required>
-              <option value="">Select ledger…</option>
-              {incomeLedgers.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
+            <SearchSelect ariaLabel="Income ledger" placeholder="Type to find a ledger…" required
+              value={form.incomeLedgerId} onChange={(v) => setForm({ ...form, incomeLedgerId: v })}
+              options={incomeLedgers.map((l) => ({ value: l.id, label: l.name }))} />
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

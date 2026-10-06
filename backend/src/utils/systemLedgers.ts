@@ -58,6 +58,41 @@ export function moneyLedgerName(method: 'CASH' | 'BANK' | 'BKASH' | 'NAGAD' | 'C
   }
 }
 
+/**
+ * Groups whose ledgers may receive or release money. A payment posted against
+ * anything else — a sales account, a customer's own ledger — would not be a
+ * movement of money at all, so the choice is checked rather than trusted.
+ */
+const MONEY_GROUPS = ['Cash-in-Hand', 'Bank Accounts'] as const;
+
+/**
+ * Which ledger the money actually lands in.
+ *
+ * `moneyLedgerName` picks one well-known ledger per method, which is right
+ * while a company banks in one place. A second bank account breaks that: every
+ * BANK receipt would still post to the first one, and neither statement would
+ * reconcile. So the caller may name the account, and the default stands only
+ * when they do not.
+ */
+export async function resolveMoneyLedgerId(
+  conn: PoolConnection, companyId: number,
+  method: 'CASH' | 'BANK' | 'BKASH' | 'NAGAD' | 'CARD',
+  chosenLedgerId?: number
+): Promise<number> {
+  if (!chosenLedgerId) return findLedgerId(conn, companyId, moneyLedgerName(method));
+
+  const [rows] = await conn.query<Row[]>(
+    `SELECT l.id FROM ledgers l
+       JOIN ledger_groups g ON g.id = l.group_id
+      WHERE l.company_id = ? AND l.id = ? AND g.name IN (?, ?) LIMIT 1`,
+    [companyId, chosenLedgerId, ...MONEY_GROUPS]
+  );
+  if (!rows.length)
+    throw ApiError.badRequest(
+      `Ledger ${chosenLedgerId} is not a cash or bank account, so money cannot be received into it.`);
+  return rows[0].id as number;
+}
+
 /** Maps a booking type to its income ledger. */
 export function salesLedgerName(type: 'FLIGHT' | 'HOTEL' | 'TOUR'): string {
   switch (type) {

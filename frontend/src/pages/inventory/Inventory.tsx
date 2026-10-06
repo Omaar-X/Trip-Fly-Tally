@@ -4,7 +4,8 @@ import { api, apiErrorMessage } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { useCompanySettings } from '../../context/CompanySettingsContext';
 import { useServerList } from '../../lib/useServerList';
-import { Badge, Column, DataTable, ErrorNote, Field, Modal, Money, PageHeader, statusTone } from '../../components/ui';
+import { Badge, Column, DataTable, ErrorNote, Field, Modal, Money, PageHeader, SearchSelect, statusTone } from '../../components/ui';
+import { VendorSearchSelect } from '../../components/EntitySearchSelect';
 import ReverseModal from '../../components/ReverseModal';
 import { fmtDate, today } from '../../lib/format';
 import { hasAnyRole, ROLE } from '../../lib/roles';
@@ -39,7 +40,6 @@ export default function Inventory() {
   const [tab, setTab] = useState<Tab>('items');
   const [items, setItems] = useState<Item[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [suppliers, setSuppliers] = useState<Lookup[]>([]);
   const [loading, setLoading] = useState(true);
   const [refresh, setRefresh] = useState(0);
   const [itemModal, setItemModal] = useState(false);
@@ -50,9 +50,8 @@ export default function Inventory() {
     Promise.all([
       api.get('/api/inventory/items'),
       api.get('/api/inventory/warehouses'),
-      api.get('/api/crm/suppliers'),
     ])
-      .then(([i, w, s]) => { setItems(i.data.data); setWarehouses(w.data.data); setSuppliers(s.data.data); })
+      .then(([i, w]) => { setItems(i.data.data); setWarehouses(w.data.data); })
       .finally(() => setLoading(false));
   }, [refresh]);
 
@@ -102,7 +101,7 @@ export default function Inventory() {
 
       <CreateItemModal open={itemModal} onClose={() => setItemModal(false)} onDone={() => { setItemModal(false); setRefresh(r => r + 1); }} />
       <MovementModal open={moveModal} onClose={() => setMoveModal(false)} items={items} warehouses={warehouses}
-        suppliers={suppliers} booksBeginFrom={company?.books_begin_from}
+        booksBeginFrom={company?.books_begin_from}
         onDone={() => { setMoveModal(false); setRefresh(r => r + 1); }} />
     </div>
   );
@@ -228,9 +227,9 @@ const emptyMovement = () => ({
   quantity: '', rate: '', date: today(), note: '',
 });
 
-function MovementModal({ open, onClose, items, warehouses, suppliers, booksBeginFrom, onDone }:
+function MovementModal({ open, onClose, items, warehouses, booksBeginFrom, onDone }:
   { open: boolean; onClose: () => void; items: Item[]; warehouses: Warehouse[];
-    suppliers: Lookup[]; booksBeginFrom?: string | null; onDone: () => void }) {
+    booksBeginFrom?: string | null; onDone: () => void }) {
   const [form, setForm] = useState(emptyMovement);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -279,10 +278,9 @@ function MovementModal({ open, onClose, items, warehouses, suppliers, booksBegin
           </Field>
         </div>
         <Field label="Item">
-          <select className="input" value={form.itemId} onChange={(e) => setForm({ ...form, itemId: e.target.value })} required>
-            <option value="">Select item…</option>
-            {items.map((i) => <option key={i.id} value={i.id}>{i.sku} — {i.name} (stock: {Number(i.stock_qty)})</option>)}
-          </select>
+          <SearchSelect ariaLabel="Item" placeholder="Type an SKU or item name…" required
+            value={form.itemId} onChange={(v) => setForm({ ...form, itemId: v })}
+            options={items.map((i) => ({ value: i.id, label: `${i.sku} — ${i.name}`, hint: `stock ${Number(i.stock_qty)}` }))} />
         </Field>
         <Field label="Warehouse" hint={isOut ? 'Stock is checked in this warehouse alone' : undefined}>
           <select className="input" value={form.warehouseId} onChange={(e) => setForm({ ...form, warehouseId: e.target.value })} required>
@@ -292,10 +290,9 @@ function MovementModal({ open, onClose, items, warehouses, suppliers, booksBegin
         </Field>
         {!isOut && (
           <Field label="Supplier" hint="Optional — books the payable on their account">
-            <select className="input" value={form.supplierId} onChange={(e) => setForm({ ...form, supplierId: e.target.value })}>
-              <option value="">None — post to Stock Adjustment</option>
-              {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            <VendorSearchSelect emptyLabel="None — post to Stock Adjustment"
+              value={form.supplierId ? Number(form.supplierId) : ''}
+              onChange={(v) => setForm({ ...form, supplierId: v === '' ? '' : String(v) })} />
           </Field>
         )}
         <div className="grid grid-cols-2 gap-3">

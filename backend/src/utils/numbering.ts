@@ -109,3 +109,23 @@ export const paymentDocPrefix = (isRefund: boolean): string => (isRefund ? 'REF'
 
 const format = (prefix: string, fy: FinancialYear, n: number): string =>
   `${prefix}-${fy.label}-${String(n).padStart(5, '0')}`;
+
+/**
+ * Workflow tickets — EDT-2026-00001, DEL-2026-00001, BDR-2026-00001,
+ * MIG-2026-00001 — numbered by CALENDAR year, not financial year.
+ *
+ * These are references people quote to each other ("approve BDR-2026-00042"),
+ * and making someone work out which financial year a date fell in before they
+ * can find a request is friction with nothing behind it. The counter mechanism
+ * is the same atomic one vouchers use, so the numbers cannot collide.
+ */
+export async function nextRequestNo(
+  conn: PoolConnection, companyId: number,
+  prefix: 'EDT' | 'DEL' | 'BDR' | 'MIG', when: Date = new Date()
+): Promise<string> {
+  const year = when.getUTCFullYear();
+  const n = await nextInSequence(conn, companyId, `REQ_${prefix}`, {
+    label: String(year), from: `${year}-01-01`, to: `${year}-12-31`,
+  });
+  return `${prefix}-${year}-${String(n).padStart(5, '0')}`;
+}

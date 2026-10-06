@@ -10,6 +10,7 @@ const CompanySetupWizard = lazy(() => import('./pages/CompanySetupWizard'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Accounting = lazy(() => import('./pages/accounting/Accounting'));
 const Reports = lazy(() => import('./pages/reports/Reports'));
+const Approvals = lazy(() => import('./pages/approvals/Approvals'));
 const Inventory = lazy(() => import('./pages/inventory/Inventory'));
 const Crm = lazy(() => import('./pages/crm/Crm'));
 const Bookings = lazy(() => import('./pages/bookings/Bookings'));
@@ -18,6 +19,7 @@ const Payments = lazy(() => import('./pages/payments/Payments'));
 const Hr = lazy(() => import('./pages/hr/Hr'));
 const Settings = lazy(() => import('./pages/Settings'));
 const DatabaseAdmin = lazy(() => import('./pages/admin/DatabaseAdmin'));
+const HistoricalReview = lazy(() => import('./pages/HistoricalReview'));
 
 function PageLoader() {
   return (
@@ -101,7 +103,9 @@ export default function App() {
           <Route path="payments" element={<Payments />} />
           <Route path="hr" element={<Hr />} />
           <Route path="reports" element={<Reports />} />
+          <Route path="approvals" element={<Approvals />} />
           <Route path="database" element={<DatabaseAdmin />} />
+          <Route path="historical-review" element={<HistoricalReview />} />
           <Route path="settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

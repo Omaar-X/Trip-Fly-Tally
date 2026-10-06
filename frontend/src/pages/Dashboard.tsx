@@ -1,12 +1,19 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import {
   TrendingUp, TrendingDown, Wallet, ReceiptText,
-  Plane, Activity, DollarSign, LayoutDashboard,
+  Plane, Activity, DollarSign, LayoutDashboard, FileSpreadsheet, Scale,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { StatCard, Spinner, PageHeader, Badge, statusTone } from '../components/ui';
 import { bdt, compactBdt, fmtDate } from '../lib/format';
+import { ROLE, hasAnyRole } from '../lib/roles';
+import { useAuth } from '../context/AuthContext';
 import type { MonthPoint, TypeSlice } from './dashboard/DashboardCharts';
+
+// Only the accounting side of the house sees the sales archive, so its section
+// and its two KPI cards are loaded only for the roles that can reach the API.
+const PreviousSalesData = lazy(() => import('./dashboard/PreviousSalesData'));
+const AccountsReceivable = lazy(() => import('./dashboard/AccountsReceivable'));
 
 // Recharts alone weighs more than every other page put together, and this is
 // the first screen after login. Loading it lazily lets the figures, tiles and
@@ -27,11 +34,32 @@ interface Summary {
 }
 interface ActivityRow { id: number; user_name: string; action: string; entity: string; created_at: string }
 
+/** What the archived sales sheets say, which is not what the ledgers say. */
+interface SalesBalance {
+  asOfLabel: string | null;
+  openingBalance: number;
+  runningBalance: number;
+  movementSince: number;
+  sheetsCounted: number;
+  /** The ACCOUNTS sheet's own receivable — a different question, different source. */
+  statedReceivable: number | null;
+  statedReceivableLabel: string | null;
+  /** The ACCOUNTS sheet's own SALES figure for the same month. */
+  statedSales: number | null;
+  /** The month's bottom line, as that sheet states it. */
+  statedProfit: number | null;
+  statedLoss: number | null;
+}
+
 export default function Dashboard() {
+  const { user } = useAuth();
+  const seesSalesArchive = hasAnyRole(user?.role, [ROLE.ADMIN, ROLE.ACCOUNTANT]);
+
   const [summary, setSummary]   = useState<Summary | null>(null);
   const [monthly, setMonthly]   = useState<MonthPoint[]>([]);
   const [byType, setByType]     = useState<TypeSlice[]>([]);
   const [activity, setActivity] = useState<ActivityRow[]>([]);
+  const [salesBalance, setSalesBalance] = useState<SalesBalance | null>(null);
   const [loading, setLoading]   = useState(true);
 
   useEffect(() => {
@@ -49,6 +77,17 @@ export default function Dashboard() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // Kept out of the Promise.all above on purpose: this call 403s for Sales and
+  // HR, and a rejection there would blank the whole dashboard for them.
+  const loadSalesBalance = useCallback(() => {
+    if (!seesSalesArchive) return;
+    api.get('/api/sales-files/balance')
+      .then((r) => setSalesBalance(r.data.data))
+      .catch(() => setSalesBalance(null));
+  }, [seesSalesArchive]);
+
+  useEffect(() => { loadSalesBalance(); }, [loadSalesBalance]);
 
   if (loading) {
     return (
@@ -109,6 +148,70 @@ export default function Dashboard() {
         />
       </div>
 
+      {/* ── Sales archive KPI cards ──
+          Deliberately a separate row from the four above. Those come from the
+          posted ledgers; these come from the Excel sheets, and putting them
+          side by side would invite the two to be read as one set of figures.
+
+          The two say different things on purpose. The first is what the latest
+          month BILLED; the second is what is still OWED, off that month's
+          ACCOUNTS balance sheet. An earlier version derived the second from the
+          first by subtracting the receipts the registers happen to record, and
+          overstated the debt roughly eightfold — the registers do not record
+          collection at all. */}
+      {seesSalesArchive && salesBalance && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {/* The office's own SALES figure, not the sum of the register's
+              rows. The two disagree — July-2026 is written up as 19,113,906
+              where the rows add to 19,352,631 — and theirs is the one they
+              will recognise, so the computed sum is shown underneath as a
+              cross-check rather than in place of it. */}
+          <StatCard
+            color="amber"
+            icon={FileSpreadsheet}
+            label="Sales"
+            value={bdt(salesBalance.statedSales ?? salesBalance.openingBalance)}
+            sub={salesBalance.asOfLabel
+              ? (salesBalance.statedSales === null
+                  ? `${salesBalance.asOfLabel} — summed from the sales register`
+                  : `${salesBalance.asOfLabel} — per the ACCOUNTS sheet`
+                    + (Math.abs(salesBalance.statedSales - salesBalance.openingBalance) >= 1
+                        ? ` · register rows add to ${bdt(salesBalance.openingBalance)}`
+                        : ''))
+              : 'No sales sheets imported yet'}
+          />
+          <StatCard
+            color="rose"
+            icon={Scale}
+            label="Outstanding Receivable"
+            value={salesBalance.statedReceivable === null
+              ? '—' : bdt(salesBalance.statedReceivable)}
+            sub={salesBalance.statedReceivableLabel
+              ? `As at ${salesBalance.statedReceivableLabel}, per the ACCOUNTS sheet`
+              : 'No balance sheet imported yet'}
+          />
+
+          {/* The month's bottom line off the same sheet. Distinct from the
+              "Net Profit (YTD)" card in the row above, which comes from the
+              posted ledgers and reads 0.00 because this archive posts nothing.
+              Both are shown so neither has to stand in for the other. */}
+          <StatCard
+            color={(salesBalance.statedProfit ?? 0) >= 0 ? 'emerald' : 'rose'}
+            icon={TrendingUp}
+            label={salesBalance.statedProfit !== null ? 'Net Profit (sheet)' : 'Net Loss (sheet)'}
+            value={salesBalance.statedProfit !== null
+              ? bdt(salesBalance.statedProfit)
+              : (salesBalance.statedLoss !== null ? bdt(salesBalance.statedLoss) : '—')}
+            sub={salesBalance.statedReceivableLabel
+              ? `${salesBalance.statedReceivableLabel} — per the ACCOUNTS sheet`
+                + (salesBalance.statedProfit !== null && salesBalance.statedLoss !== null
+                    ? ` · that sheet also carries a net loss line of ${bdt(salesBalance.statedLoss)}`
+                    : '')
+              : 'No balance sheet imported yet'}
+          />
+        </div>
+      )}
+
       {/* ── Charts row ── */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
 
@@ -140,6 +243,15 @@ export default function Dashboard() {
           </Suspense>
         </div>
       </div>
+
+      {/* ── Accounts receivable ──
+          Below the charts and above the operational tiles: it is a statement
+          about the book, not about this month's activity. */}
+      {seesSalesArchive && (
+        <Suspense fallback={<ChartFallback />}>
+          <AccountsReceivable />
+        </Suspense>
+      )}
 
       {/* ── Bottom row ── */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
@@ -211,6 +323,13 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* ── Previous sales data ── */}
+      {seesSalesArchive && (
+        <Suspense fallback={<ChartFallback />}>
+          <PreviousSalesData onImported={loadSalesBalance} />
+        </Suspense>
+      )}
     </div>
   );
 }

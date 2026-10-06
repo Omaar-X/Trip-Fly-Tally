@@ -58,7 +58,9 @@ api.interceptors.response.use(undefined, async (error: AxiosError) => {
     })();
     const token = await refreshing;
     if (token) { original.headers!.Authorization = `Bearer ${token}`; return api(original); }
-    window.location.href = '/login';
+    setTokens(null, null);
+    storage.remove('tf_user');
+    if (window.location.pathname !== '/login') window.location.href = '/login';
   }
   throw error;
 });

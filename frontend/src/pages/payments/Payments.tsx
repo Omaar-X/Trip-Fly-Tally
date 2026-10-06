@@ -3,7 +3,8 @@ import { Plus, ArrowDownLeft, ArrowUpRight, Undo2 } from 'lucide-react';
 import { api, apiErrorMessage } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { useServerList } from '../../lib/useServerList';
-import { Badge, Column, DataTable, ErrorNote, Field, Modal, Money, PageHeader, statusTone } from '../../components/ui';
+import { Badge, Column, DataTable, ErrorNote, Field, Modal, Money, PageHeader, SearchSelect, statusTone } from '../../components/ui';
+import { CustomerSearchSelect, VendorSearchSelect } from '../../components/EntitySearchSelect';
 import ReverseModal from '../../components/ReverseModal';
 import { bdt, fmtDate, today } from '../../lib/format';
 import { hasAnyRole, ROLE } from '../../lib/roles';
@@ -16,7 +17,6 @@ interface PaymentRow {
   /** REVERSED once its voucher has been mirrored — the payment is spent. */
   voucher_status?: 'ACTIVE' | 'REVERSED' | null;
 }
-interface Lookup { id: number; name: string }
 interface OpenInvoice { id: number; invoice_no: string; customer_id: number; customer_name: string; due: string; status: string }
 
 const METHODS = ['CASH', 'BANK', 'BKASH', 'NAGAD', 'CARD'] as const;
@@ -95,20 +95,24 @@ function RecordModal({ open, onClose, onDone }: { open: boolean; onClose: () => 
   const { user } = useAuth();
   // Sales' "Collection" scope covers receiving money from customers only — the backend rejects OUT for Sales too.
   const directions = user?.role === ROLE.SALES ? (['IN'] as const) : (['IN', 'OUT'] as const);
-  const [customers, setCustomers] = useState<Lookup[]>([]);
-  const [suppliers, setSuppliers] = useState<Lookup[]>([]);
   const [invoices, setInvoices] = useState<OpenInvoice[]>([]);
   const [form, setForm] = useState({
     direction: 'IN' as 'IN' | 'OUT', customerId: '', supplierId: '',
-    invoiceId: '', method: 'CASH', amount: '', paymentDate: today(), notes: ''
+    invoiceId: '', method: 'CASH', moneyLedgerId: '', amount: '', paymentDate: today(), notes: ''
   });
+  const [bankLedgers, setBankLedgers] = useState<{ id: number; name: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    api.get('/api/crm/customers').then((r) => setCustomers(r.data.data));
-    api.get('/api/crm/suppliers').then((r) => setSuppliers(r.data.data));
+    // Party pickers query the server per keystroke rather than preloading —
+    // this modal opens on every payment, and the list endpoint is expensive.
+    // A company with two bank accounts must say which one the money moved
+    // through, or neither statement will ever reconcile.
+    api.get('/api/ledgers').then((r) =>
+      setBankLedgers((r.data.data as { id: number; name: string; group_name: string }[])
+        .filter((l) => l.group_name === 'Bank Accounts')));
     // The open-invoice picker asks the API for exactly what it needs. Fetching
     // the invoice list and filtering it here would now see only the first
     // page, so a customer's unpaid invoice could simply be missing from the
@@ -133,11 +137,12 @@ function RecordModal({ open, onClose, onDone }: { open: boolean; onClose: () => 
         supplierId: form.direction === 'OUT' ? Number(form.supplierId) : undefined,
         invoiceId: form.direction === 'IN' && form.invoiceId ? Number(form.invoiceId) : undefined,
         method: form.method,
+        moneyLedgerId: form.moneyLedgerId ? Number(form.moneyLedgerId) : undefined,
         amount: Number(form.amount),
         paymentDate: form.paymentDate,
         notes: form.notes || undefined
       });
-      setForm({ direction: 'IN', customerId: '', supplierId: '', invoiceId: '', method: 'CASH', amount: '', paymentDate: today(), notes: '' });
+      setForm({ direction: 'IN', customerId: '', supplierId: '', invoiceId: '', method: 'CASH', moneyLedgerId: '', amount: '', paymentDate: today(), notes: '' });
       onDone();
     } catch (err) { setError(apiErrorMessage(err)); }
     finally { setBusy(false); }
@@ -164,16 +169,15 @@ function RecordModal({ open, onClose, onDone }: { open: boolean; onClose: () => 
         {form.direction === 'IN' ? (
           <>
             <Field label="Customer">
-              <select className="input" value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value, invoiceId: '' })} required>
-                <option value="">Select customer…</option>
-                {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              <CustomerSearchSelect required
+                value={form.customerId ? Number(form.customerId) : ''}
+                onChange={(v) => setForm({ ...form, customerId: v === '' ? '' : String(v), invoiceId: '' })} />
             </Field>
             <Field label="Settle against invoice" hint="Optional — updates the invoice's paid status">
-              <select className="input" value={form.invoiceId} onChange={(e) => setForm({ ...form, invoiceId: e.target.value })}>
-                <option value="">On account (no specific invoice)</option>
-                {openForCustomer.map((i) => <option key={i.id} value={i.id}>{i.invoice_no} — due {bdt(Number(i.due))}</option>)}
-              </select>
+              <SearchSelect ariaLabel="Settle against invoice" placeholder="Type an invoice number…"
+                emptyLabel="On account (no specific invoice)"
+                value={form.invoiceId} onChange={(v) => setForm({ ...form, invoiceId: v })}
+                options={openForCustomer.map((i) => ({ value: i.id, label: i.invoice_no, hint: `due ${bdt(Number(i.due))}` }))} />
             </Field>
             {selectedInvoice && (
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
@@ -183,22 +187,33 @@ function RecordModal({ open, onClose, onDone }: { open: boolean; onClose: () => 
           </>
         ) : (
           <Field label="Supplier">
-            <select className="input" value={form.supplierId} onChange={(e) => setForm({ ...form, supplierId: e.target.value })} required>
-              <option value="">Select supplier…</option>
-              {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            <VendorSearchSelect required
+              value={form.supplierId ? Number(form.supplierId) : ''}
+              onChange={(v) => setForm({ ...form, supplierId: v === '' ? '' : String(v) })} />
           </Field>
         )}
 
         <div className="grid grid-cols-3 gap-3">
           <Field label="Method">
-            <select className="input" value={form.method} onChange={(e) => setForm({ ...form, method: e.target.value })}>
+            <select className="input" value={form.method}
+              onChange={(e) => setForm({ ...form, method: e.target.value, moneyLedgerId: '' })}>
               {METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
           </Field>
           <Field label="Amount (৳)"><input className="input num" type="number" min="0.01" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required /></Field>
           <Field label="Date"><input type="date" className="input num" value={form.paymentDate} onChange={(e) => setForm({ ...form, paymentDate: e.target.value })} required /></Field>
         </div>
+
+        {/* Only asked once the company actually keeps more than one account —
+            with a single bank there is nothing to choose and the method's
+            default stands. */}
+        {form.method === 'BANK' && bankLedgers.length > 1 && (
+          <Field label="Bank account" hint="Which account the money actually moves through">
+            <SearchSelect ariaLabel="Bank account" placeholder="Type a bank name…" required
+              value={form.moneyLedgerId} onChange={(v) => setForm({ ...form, moneyLedgerId: v })}
+              options={bankLedgers.map((l) => ({ value: l.id, label: l.name }))} />
+          </Field>
+        )}
         <Field label="Notes"><input className="input" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Optional" /></Field>
 
         <ErrorNote message={error} />

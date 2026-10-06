@@ -1,7 +1,7 @@
 {
   "name": "erp-backend",
   "version": "1.0.0",
-  "description": "ERP — Node.js + Express + TypeScript backend",
+  "description": "ERP \u2014 Node.js + Express + TypeScript backend",
   "main": "dist/server.js",
   "engines": {
     "node": ">=20.19 <25",
@@ -9,12 +9,27 @@
   },
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "dev:user": "npm run build && node dist/scripts/devUser.js",
     "build": "tsc",
     "prestart": "node dist/scripts/initDatabase.js",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "import:parties": "npm run build && node dist/scripts/importPartyMaster.js",
+    "migration:parse": "npm run build && node dist/scripts/migrate.js parse",
+    "migration:dry-run": "npm run build && node dist/scripts/migrate.js dry-run",
+    "migration:post": "npm run build && node dist/scripts/migrate.js post",
+    "migration:reconcile": "npm run build && node dist/scripts/migrate.js reconcile",
+    "migration:rollback": "npm run build && node dist/scripts/migrate.js rollback",
+    "migration:status": "npm run build && node dist/scripts/migrate.js status",
+    "integration:ceo": "npm run build && node dist/scripts/provisionIntegrationCeo.js",
+    "phase5:evidence": "npm run build && node dist/scripts/phase5EvidenceProcessor.js",
+    "phase5:d003": "npm run build && node dist/scripts/phase5D003Processor.js",
+    "phase5:d004": "npm run build && node dist/scripts/phase5D004Processor.js",
+    "phase5:d005": "npm run build && node dist/scripts/phase5D005Processor.js",
+    "phase5:d008": "npm run build && node dist/scripts/phase5D008Processor.js",
+    "sales-files:check": "npm run build && node dist/scripts/salesFilesParseCheck.js"
   },
   "dependencies": {
     "@types/nodemailer": "^8.0.1",
@@ -22,6 +37,7 @@
     "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.19.2",
     "express-rate-limit": "^8.5.2",
     "helmet": "^7.1.0",

@@ -10,6 +10,16 @@ const customerSchema = z.object({
   phone: z.string().max(30).optional(), address: z.string().max(255).optional(),
   passportNo: z.string().max(40).optional(), creditLimit: z.number().min(0).default(0)
 });
+/**
+ * `q` is optional so an empty picker can still show the first page of names
+ * instead of nothing at all. `limit` is capped again in the service — the
+ * schema stops the obvious abuse, the service owns the real ceiling.
+ */
+const searchSchema = z.object({
+  q: z.string().max(150).optional().default(''),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+
 const supplierSchema = z.object({
   name: z.string().min(2).max(150), email: z.string().email().optional(),
   phone: z.string().max(30).optional(), address: z.string().max(255).optional()
@@ -18,6 +28,18 @@ const supplierSchema = z.object({
 /** GET /api/crm/customers — with live outstanding balance from the books */
 export const listCustomers = asyncHandler(async (req: Request, res: Response) => {
   res.json({ success: true, data: await crmService.listCustomers(req.user!.companyId) });
+});
+
+/**
+ * GET /api/crm/customers/search?q=&limit= — what the pickers call.
+ *
+ * Separate from the list endpoint because the list computes an outstanding
+ * balance per customer over every voucher entry; a dropdown firing on each
+ * keystroke must not pay for that.
+ */
+export const searchCustomers = asyncHandler(async (req: Request, res: Response) => {
+  const { q, limit } = searchSchema.parse(req.query);
+  res.json({ success: true, data: await crmService.searchCustomers(req.user!.companyId, q, limit) });
 });
 
 /** POST /api/crm/customers — also auto-creates the receivable sub-ledger */
@@ -37,6 +59,12 @@ export const customerProfile = asyncHandler(async (req: Request, res: Response) 
 /** GET /api/crm/suppliers */
 export const listSuppliers = asyncHandler(async (req: Request, res: Response) => {
   res.json({ success: true, data: await crmService.listSuppliers(req.user!.companyId) });
+});
+
+/** GET /api/crm/suppliers/search?q=&limit= */
+export const searchSuppliers = asyncHandler(async (req: Request, res: Response) => {
+  const { q, limit } = searchSchema.parse(req.query);
+  res.json({ success: true, data: await crmService.searchSuppliers(req.user!.companyId, q, limit) });
 });
 
 /** POST /api/crm/suppliers */

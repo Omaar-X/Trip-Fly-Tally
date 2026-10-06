@@ -52,6 +52,10 @@ CREATE TABLE companies (
   fy_start_month    TINYINT UNSIGNED NOT NULL DEFAULT 7,
   books_begin_from  DATE             NULL,
   books_locked_upto DATE             NULL,
+  --  back_entry_grace_days  how old a voucher date may be before Accountant /
+  --                     Sales need Admin or CEO approval. 0 = anything not
+  --                     dated today needs it.
+  back_entry_grace_days TINYINT UNSIGNED NOT NULL DEFAULT 7,
   is_configured  TINYINT(1)         NOT NULL DEFAULT 0,
   created_at     TIMESTAMP          NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at     TIMESTAMP          NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -132,6 +136,59 @@ CREATE TABLE audit_logs (
   INDEX idx_audit_entity        (entity, entity_id),
   INDEX idx_audit_user_time     (user_id, created_at),
   INDEX idx_audit_time          (created_at)
+) ENGINE=InnoDB;
+
+
+-- approval_requests ─── corrections that wait for Admin or CEO ──────────────
+--  Accountant and Sales work freely going forward, but anything that REWRITES
+--  history — a back-dated voucher, a reversal, a booking cancellation that
+--  voids an invoice — is parked here first.
+--
+--  Parked, not posted-then-cancelled: vouchers are immutable and never
+--  deleted, so a rejected entry that had already reached the books would leave
+--  a reversal pair standing for something that was never meant to happen.
+--
+--  On approval the payload is replayed through the same service path an Admin
+--  would have used, so every posting rule still applies. FAILED records a
+--  replay the engine refused (period locked meanwhile, ledger gone) so an
+--  approved request is never silently lost.
+CREATE TABLE approval_requests (
+  id             BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  company_id     INT UNSIGNED    NOT NULL,
+  action         ENUM('VOUCHER_CREATE','VOUCHER_REVERSE',
+                      'BOOKING_CREATE','BOOKING_CONFIRM','BOOKING_CANCEL',
+                      'INVOICE_CREATE','PAYMENT_RECORD','PAYMENT_REVERSE',
+                      'STOCK_MOVEMENT','STOCK_MOVEMENT_REVERSE')
+                                 NOT NULL,
+  target_id      BIGINT UNSIGNED NULL,      -- booking/voucher/payment acted upon
+  payload        JSON            NOT NULL,  -- original request body, replayed verbatim
+  effective_date DATE            NULL,      -- the back-date that triggered the rule
+  reason         VARCHAR(500)    NOT NULL,  -- why the requester needs it
+  -- WITHDRAWN: the requester called it off before anyone decided, so the
+  -- approver's queue is not cluttered with requests nobody wants any more.
+  status         ENUM('PENDING','APPROVED','REJECTED','WITHDRAWN','FAILED')
+                                 NOT NULL DEFAULT 'PENDING',
+  requested_by   INT UNSIGNED    NOT NULL,
+  decided_by     INT UNSIGNED    NULL,
+  decided_at     DATETIME        NULL,
+  decision_note  VARCHAR(500)    NULL,
+  result_id      BIGINT UNSIGNED NULL,      -- what got created on approval
+  failure_reason VARCHAR(500)    NULL,
+  -- A rejected request is never edited and re-decided: the requester fixes it
+  -- and sends a NEW row pointing back here, so the rejection and its reason
+  -- stay readable. Same discipline as vouchers.
+  resubmitted_from BIGINT UNSIGNED NULL,
+  created_at     TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  CONSTRAINT fk_ar_company   FOREIGN KEY (company_id)   REFERENCES companies(id),
+  CONSTRAINT fk_ar_requester FOREIGN KEY (requested_by) REFERENCES users(id),
+  CONSTRAINT fk_ar_decider   FOREIGN KEY (decided_by)   REFERENCES users(id),
+  CONSTRAINT fk_ar_prior     FOREIGN KEY (resubmitted_from) REFERENCES approval_requests(id),
+
+  INDEX idx_ar_queue  (company_id, status, created_at),
+  INDEX idx_ar_mine   (company_id, requested_by, status),
+  INDEX idx_ar_target (company_id, action, target_id, status)
 ) ENGINE=InnoDB;
 
 
@@ -280,6 +337,12 @@ CREATE TABLE customers (
   company_id   INT UNSIGNED     NOT NULL,
   ledger_id    INT UNSIGNED     NOT NULL UNIQUE, -- receivable sub-ledger
   name         VARCHAR(150)     NOT NULL,
+  --  name_key   the name with case and whitespace taken out of the comparison,
+  --             so "SUN PHARMA", "Sun Pharma" and "SUN  PHARMA" cannot become
+  --             three customers. Generated, so it can never drift from `name`.
+  --             Spelling is NOT normalised — "GROUPO SORCING" vs "ECO SORCHING"
+  --             is a judgement only a human can make (see CLIENT_DECISIONS.md).
+  name_key     VARCHAR(150)     AS (UPPER(TRIM(REGEXP_REPLACE(name, '[[:space:]]+', ' ')))) STORED,
   email        VARCHAR(150),
   phone        VARCHAR(30),
   address      VARCHAR(255),
@@ -292,7 +355,10 @@ CREATE TABLE customers (
   CONSTRAINT fk_c_company FOREIGN KEY (company_id) REFERENCES companies(id),
   CONSTRAINT fk_c_ledger  FOREIGN KEY (ledger_id)  REFERENCES ledgers(id),
 
+  UNIQUE KEY uq_customer_name     (company_id, name_key),
   INDEX      idx_c_company_active (company_id, is_active),
+  INDEX      idx_c_company_name   (company_id, name),   -- picker prefix search
+  INDEX      idx_c_company_phone  (company_id, phone),  -- picker phone search
   FULLTEXT   ft_c_name_email      (name, email)
 ) ENGINE=InnoDB;
 
@@ -302,6 +368,7 @@ CREATE TABLE suppliers (
   company_id INT UNSIGNED       NOT NULL,
   ledger_id  INT UNSIGNED       NOT NULL UNIQUE, -- payable sub-ledger
   name       VARCHAR(150)       NOT NULL,
+  name_key   VARCHAR(150)       AS (UPPER(TRIM(REGEXP_REPLACE(name, '[[:space:]]+', ' ')))) STORED,
   email      VARCHAR(150),
   phone      VARCHAR(30),
   address    VARCHAR(255),
@@ -312,7 +379,10 @@ CREATE TABLE suppliers (
   CONSTRAINT fk_s_company FOREIGN KEY (company_id) REFERENCES companies(id),
   CONSTRAINT fk_s_ledger  FOREIGN KEY (ledger_id)  REFERENCES ledgers(id),
 
+  UNIQUE KEY uq_supplier_name   (company_id, name_key),
   INDEX    idx_s_company_active (company_id, is_active),
+  INDEX    idx_s_company_name   (company_id, name),
+  INDEX    idx_s_company_phone  (company_id, phone),
   FULLTEXT ft_s_name_email      (name, email)
 ) ENGINE=InnoDB;
 

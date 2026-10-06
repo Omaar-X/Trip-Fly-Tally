@@ -7,8 +7,11 @@ import { ROLE } from '../../constants/roles';
 const router = Router();
 router.use(authenticate);
 router.get('/customers', c.listCustomers);
+// Before '/customers/:id' — otherwise the id route swallows "search".
+router.get('/customers/search', c.searchCustomers);
 router.post('/customers', allow(ROLE.SALES, ROLE.ACCOUNTANT, ROLE.ADMIN), c.createCustomer);
 router.get('/customers/:id', c.customerProfile);
 router.get('/suppliers', c.listSuppliers);
+router.get('/suppliers/search', c.searchSuppliers);
 router.post('/suppliers', allow(ROLE.ACCOUNTANT, ROLE.ADMIN), c.createSupplier);
 export default router;

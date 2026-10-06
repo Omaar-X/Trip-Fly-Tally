@@ -18,6 +18,8 @@ const recordSchema = z.object({
   invoiceId: z.number().int().positive().optional(),
   refundOfPaymentId: z.number().int().positive().optional(),
   method: z.enum(['CASH', 'BANK', 'BKASH', 'NAGAD', 'CARD']),
+  // Which cash/bank account, when the company keeps more than one.
+  moneyLedgerId: z.number().int().positive().optional(),
   amount: z.number().positive(),
   paymentDate: isoDateSchema,
   notes: z.string().max(255).optional(),

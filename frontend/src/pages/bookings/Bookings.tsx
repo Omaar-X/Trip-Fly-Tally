@@ -4,7 +4,8 @@ import { api, apiErrorMessage } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
 import { useCompanySettings } from '../../context/CompanySettingsContext';
 import { useServerList } from '../../lib/useServerList';
-import { Badge, Column, DataTable, ErrorNote, Field, Modal, Money, PageHeader, statusTone } from '../../components/ui';
+import { Badge, Column, DataTable, ErrorNote, Field, Modal, Money, PageHeader, SearchSelect, statusTone } from '../../components/ui';
+import { CustomerSearchSelect, VendorSearchSelect } from '../../components/EntitySearchSelect';
 import { bdt, fmtDate, today } from '../../lib/format';
 import { hasAnyRole, ROLE } from '../../lib/roles';
 
@@ -15,7 +16,6 @@ interface Booking {
   customer_id: number; customer_name: string;
   supplier_name: string | null; agent_name: string | null; invoice_no: string | null;
 }
-interface Lookup { id: number; name: string }
 interface Employee { id: number; name: string; emp_code: string }
 
 const TYPE_ICON: Record<string, JSX.Element> = {
@@ -33,16 +33,14 @@ export default function Bookings() {
   const [confirmOf, setConfirmOf] = useState<Booking | null>(null);
   const [cancelOf, setCancelOf] = useState<Booking | null>(null);
 
-  const [customers, setCustomers] = useState<Lookup[]>([]);
-  const [suppliers, setSuppliers] = useState<Lookup[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
 
   const { rows, loading, paging, reload } = useServerList<Booking>(
     '/api/bookings', { status: status || undefined });
 
   useEffect(() => {
-    api.get('/api/crm/customers').then((r) => setCustomers(r.data.data));
-    api.get('/api/crm/suppliers').then((r) => setSuppliers(r.data.data));
+    // Customers and suppliers are no longer preloaded — their pickers query
+    // the server as the user types (see EntitySearchSelect).
     // Employee lookup needs HR/ADMIN; fall back silently for SALES/ACCOUNTANT.
     api.get('/api/hr/employees').then((r) => setEmployees(r.data.data)).catch(() => setEmployees([]));
   }, []);
@@ -94,7 +92,7 @@ export default function Bookings() {
       <DataTable columns={columns} rows={rows} loading={loading} paging={paging} empty="No bookings yet — create one to get started." />
 
       <CreateBookingModal open={createOpen} onClose={() => setCreateOpen(false)}
-        customers={customers} suppliers={suppliers} employees={employees}
+        employees={employees}
         onDone={() => { setCreateOpen(false); reload(); }} />
       <ConfirmModal booking={confirmOf} onClose={() => setConfirmOf(null)} onDone={() => { setConfirmOf(null); reload(); }} />
       <CancelModal booking={cancelOf} onClose={() => setCancelOf(null)} onDone={() => { setCancelOf(null); reload(); }} />
@@ -102,8 +100,8 @@ export default function Bookings() {
   );
 }
 
-function CreateBookingModal({ open, onClose, customers, suppliers, employees, onDone }:
-  { open: boolean; onClose: () => void; customers: Lookup[]; suppliers: Lookup[]; employees: Employee[]; onDone: () => void }) {
+function CreateBookingModal({ open, onClose, employees, onDone }:
+  { open: boolean; onClose: () => void; employees: Employee[]; onDone: () => void }) {
   const [form, setForm] = useState({
     customerId: '', bookingType: 'FLIGHT', travelDate: '', returnDate: '',
     costPrice: '', salePrice: '', supplierId: '', agentId: '', details: ''
@@ -138,10 +136,9 @@ function CreateBookingModal({ open, onClose, customers, suppliers, employees, on
       <form onSubmit={submit} className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <Field label="Customer">
-            <select className="input" value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })} required>
-              <option value="">Select customer…</option>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <CustomerSearchSelect required
+              value={form.customerId ? Number(form.customerId) : ''}
+              onChange={(v) => setForm({ ...form, customerId: v === '' ? '' : String(v) })} />
           </Field>
           <Field label="Service type">
             <select className="input" value={form.bookingType} onChange={(e) => setForm({ ...form, bookingType: e.target.value })}>
@@ -163,16 +160,14 @@ function CreateBookingModal({ open, onClose, customers, suppliers, employees, on
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Supplier" hint="Required for cost posting on confirm">
-            <select className="input" value={form.supplierId} onChange={(e) => setForm({ ...form, supplierId: e.target.value })}>
-              <option value="">None</option>
-              {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            <VendorSearchSelect emptyLabel="None"
+              value={form.supplierId ? Number(form.supplierId) : ''}
+              onChange={(v) => setForm({ ...form, supplierId: v === '' ? '' : String(v) })} />
           </Field>
           <Field label="Sales agent" hint="Earns commission on margin">
-            <select className="input" value={form.agentId} onChange={(e) => setForm({ ...form, agentId: e.target.value })}>
-              <option value="">None</option>
-              {employees.map((e) => <option key={e.id} value={e.id}>{e.emp_code} — {e.name}</option>)}
-            </select>
+            <SearchSelect ariaLabel="Sales agent" placeholder="Type a name or code…" emptyLabel="None"
+              value={form.agentId} onChange={(v) => setForm({ ...form, agentId: v })}
+              options={employees.map((e) => ({ value: e.id, label: e.name, hint: e.emp_code }))} />
           </Field>
         </div>
         <Field label="Details / PNR / room info"><input className="input" value={form.details} onChange={(e) => setForm({ ...form, details: e.target.value })} placeholder="e.g. DAC→DXB, BG147, PNR X9K2L" /></Field>

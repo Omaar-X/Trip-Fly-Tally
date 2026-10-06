@@ -1,8 +1,8 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, BookOpenText, ScrollText, PenLine, Trash2, Eye, Scale, Undo2 } from 'lucide-react';
 import { api, apiErrorMessage } from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
-import { Badge, Column, DataTable, ErrorNote, Field, Modal, Money, PageHeader, statusTone } from '../../components/ui';
+import { Badge, Column, DataTable, ErrorNote, Field, Modal, Money, PageHeader, SearchSelect, statusTone } from '../../components/ui';
 import ReverseModal from '../../components/ReverseModal';
 import { bdt, fmtDate, today } from '../../lib/format';
 import { hasAnyRole, ROLE } from '../../lib/roles';
@@ -38,6 +38,20 @@ interface StatementData {
 }
 
 const VOUCHER_TYPES = ['JOURNAL', 'PAYMENT', 'RECEIPT', 'SALES', 'PURCHASE', 'CONTRA', 'DEBIT_NOTE', 'CREDIT_NOTE'] as const;
+
+/**
+ * The function keys Tally has used for these vouchers for decades. Anyone
+ * hired off a Tally desk already has them in their fingers, so matching them
+ * exactly matters more than picking keys that would be free in a browser —
+ * which is why F5 stops reloading the page while this form is open.
+ */
+const VOUCHER_HOTKEYS: Record<string, typeof VOUCHER_TYPES[number]> = {
+  F4: 'CONTRA', F5: 'PAYMENT', F6: 'RECEIPT',
+  F7: 'JOURNAL', F8: 'SALES', F9: 'PURCHASE',
+};
+const HOTKEY_OF = Object.fromEntries(
+  Object.entries(VOUCHER_HOTKEYS).map(([key, type]) => [type, key])
+) as Partial<Record<typeof VOUCHER_TYPES[number], string>>;
 
 /**
  * Net balance of a ledger, signed toward its natural side.
@@ -88,7 +102,11 @@ export default function Accounting() {
 
       {tab === 'ledgers' && <LedgersTab ledgers={ledgers} groups={groups} loading={loading} canWrite={canWrite} onChanged={reloadLedgers} />}
       {tab === 'vouchers' && <VouchersTab canWrite={canWrite} />}
-      {tab === 'new' && canWrite && <NewVoucher ledgers={ledgers} onPosted={() => { reloadLedgers(); setTab('vouchers'); }} />}
+      {tab === 'new' && canWrite && (
+        <NewVoucher ledgers={ledgers} groups={groups}
+          onLedgerCreated={reloadLedgers}
+          onPosted={() => { reloadLedgers(); setTab('vouchers'); }} />
+      )}
     </div>
   );
 }
@@ -133,9 +151,16 @@ function LedgersTab({ ledgers, groups, loading, canWrite, onChanged }:
   );
 }
 
-function CreateLedgerModal({ open, onClose, groups, onCreated }:
-  { open: boolean; onClose: () => void; groups: Group[]; onCreated: () => void }) {
-  const [name, setName] = useState('');
+/**
+ * Reused by the ledgers list and, mid-entry, by the voucher form — which is
+ * why it reports WHICH ledger it created rather than just that something
+ * changed: the voucher line that triggered it needs to select the new account
+ * without the operator hunting for it.
+ */
+function CreateLedgerModal({ open, onClose, groups, onCreated, initialName = '' }:
+  { open: boolean; onClose: () => void; groups: Group[];
+    onCreated: (ledger: { id: number; name: string }) => void; initialName?: string }) {
+  const [name, setName] = useState(initialName);
   const [groupId, setGroupId] = useState('');
   const [openingBalance, setOpeningBalance] = useState('0');
   const [openingType, setOpeningType] = useState<'DR' | 'CR'>('DR');
@@ -146,12 +171,13 @@ function CreateLedgerModal({ open, onClose, groups, onCreated }:
     e.preventDefault();
     setBusy(true); setError(null);
     try {
-      await api.post('/api/ledgers', {
+      const created = await api.post('/api/ledgers', {
         name, groupId: Number(groupId),
         openingBalance: Number(openingBalance) || 0, openingType
       });
-      setName(''); setOpeningBalance('0');
-      onCreated();
+      const id = Number(created.data.data.id);
+      setName(''); setOpeningBalance('0'); setGroupId('');
+      onCreated({ id, name });
     } catch (err) { setError(apiErrorMessage(err)); }
     finally { setBusy(false); }
   };
@@ -371,7 +397,15 @@ interface EntryDraft { ledgerId: string; type: 'DR' | 'CR'; amount: string; note
  * ends — debit from the left, credit from the right — and locks shut in
  * brand-teal only when Dr == Cr.
  */
-function NewVoucher({ ledgers, onPosted }: { ledgers: Ledger[]; onPosted: () => void }) {
+function NewVoucher({ ledgers, groups, onPosted, onLedgerCreated }:
+  { ledgers: Ledger[]; groups: Group[]; onPosted: () => void; onLedgerCreated: () => void }) {
+  /**
+   * Which entry line asked for a new ledger. Creating one used to mean leaving
+   * for the Ledgers tab, which unmounts this form — every line already typed
+   * was gone on the way back. The modal keeps the form mounted underneath.
+   */
+  const [creatingFor, setCreatingFor] = useState<number | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const [type, setType] = useState<typeof VOUCHER_TYPES[number]>('JOURNAL');
   const [date, setDate] = useState(today());
   const [narration, setNarration] = useState('');
@@ -384,6 +418,10 @@ function NewVoucher({ ledgers, onPosted }: { ledgers: Ledger[]; onPosted: () => 
   const [busy, setBusy] = useState(false);
   const [posted, setPosted] = useState<string | null>(null);
 
+  const ledgerOptions = useMemo(
+    () => ledgers.map((l) => ({ value: l.id, label: l.name, hint: l.group_name })),
+    [ledgers]);
+
   const totals = useMemo(() => {
     const dr = entries.filter(e => e.type === 'DR').reduce((s, e) => s + (Number(e.amount) || 0), 0);
     const cr = entries.filter(e => e.type === 'CR').reduce((s, e) => s + (Number(e.amount) || 0), 0);
@@ -391,6 +429,31 @@ function NewVoucher({ ledgers, onPosted }: { ledgers: Ledger[]; onPosted: () => 
   }, [entries]);
   const balanced = totals.dr > 0 && Math.abs(totals.dr - totals.cr) < 0.005;
   const max = Math.max(totals.dr, totals.cr, 1);
+
+  /**
+   * Keyboard driving, Tally-style: a function key switches the voucher type,
+   * Ctrl+Enter posts. Bound to the window rather than the form so it answers
+   * wherever the cursor happens to be among the entry lines — but never while
+   * the new-ledger dialog is up, which owns the keyboard then.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (creatingFor !== null) return;
+
+      const hotkeyType = VOUCHER_HOTKEYS[e.key];
+      if (hotkeyType && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        setType(hotkeyType);
+        return;
+      }
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        formRef.current?.requestSubmit();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [creatingFor]);
 
   const setEntry = (i: number, patch: Partial<EntryDraft>) =>
     setEntries((prev) => prev.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
@@ -420,13 +483,42 @@ function NewVoucher({ ledgers, onPosted }: { ledgers: Ledger[]; onPosted: () => 
   };
 
   return (
-    <form onSubmit={submit} className="card p-5">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Field label="Voucher type">
-          <select className="input" value={type} onChange={(e) => setType(e.target.value as typeof type)}>
-            {VOUCHER_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </Field>
+    <>
+    <CreateLedgerModal
+      open={creatingFor !== null}
+      onClose={() => setCreatingFor(null)}
+      groups={groups}
+      onCreated={({ id }) => {
+        // Select it straight into the line that asked, then reload the list so
+        // the other lines can reach it too.
+        if (creatingFor !== null) setEntry(creatingFor, { ledgerId: String(id) });
+        setCreatingFor(null);
+        onLedgerCreated();
+      }}
+    />
+    <form ref={formRef} onSubmit={submit} className="card p-5">
+      <div className="mb-4">
+        <span className="label">Voucher type</span>
+        <div className="flex flex-wrap gap-1.5">
+          {VOUCHER_TYPES.map((t) => (
+            <button key={t} type="button" onClick={() => setType(t)}
+              aria-pressed={type === t}
+              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition
+                ${type === t
+                  ? 'border-brand-500 bg-brand-50 text-brand-700 dark:bg-brand-950/60 dark:text-brand-200'
+                  : 'border-slate-200 text-slate-500 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800'}`}>
+              {t.replace('_', ' ')}
+              {HOTKEY_OF[t] && (
+                <kbd className="rounded bg-slate-200/70 px-1 text-[10px] font-bold text-slate-500 dark:bg-slate-700 dark:text-slate-300">
+                  {HOTKEY_OF[t]}
+                </kbd>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         <Field label="Date"><input type="date" className="input num" value={date} onChange={(e) => setDate(e.target.value)} required /></Field>
         <Field label="Reference"><input className="input" value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Bill / PNR / memo no." /></Field>
         <Field label="Narration"><input className="input" value={narration} onChange={(e) => setNarration(e.target.value)} placeholder="What is this entry for?" /></Field>
@@ -440,10 +532,23 @@ function NewVoucher({ ledgers, onPosted }: { ledgers: Ledger[]; onPosted: () => 
               value={en.type} onChange={(e) => setEntry(i, { type: e.target.value as 'DR' | 'CR' })}>
               <option value="DR">DEBIT</option><option value="CR">CREDIT</option>
             </select>
-            <select className="input col-span-4 !py-1.5" value={en.ledgerId} onChange={(e) => setEntry(i, { ledgerId: e.target.value })} required>
-              <option value="">Select ledger…</option>
-              {ledgers.map((l) => <option key={l.id} value={l.id}>{l.name} · {l.group_name}</option>)}
-            </select>
+            <div className="col-span-4 flex items-center gap-1">
+              <SearchSelect
+                className="flex-1"
+                ariaLabel={`Ledger for line ${i + 1}`}
+                placeholder="Type to find a ledger…"
+                value={en.ledgerId}
+                onChange={(v) => setEntry(i, { ledgerId: v })}
+                options={ledgerOptions}
+                required
+              />
+              <button type="button" onClick={() => setCreatingFor(i)}
+                className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-brand-50 hover:text-brand-600 dark:hover:bg-brand-950"
+                title="Create a new ledger without losing this voucher"
+                aria-label={`New ledger for line ${i + 1}`}>
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
             <input className="input num col-span-2 !py-1.5 text-right" type="number" min="0.01" step="0.01"
               placeholder="0.00" value={en.amount} onChange={(e) => setEntry(i, { amount: e.target.value })} required />
             <input className="input col-span-3 !py-1.5" placeholder="Line note (optional)" value={en.note} onChange={(e) => setEntry(i, { note: e.target.value })} />
@@ -483,9 +588,11 @@ function NewVoucher({ ledgers, onPosted }: { ledgers: Ledger[]; onPosted: () => 
         <div className="flex justify-end">
           <button className="btn btn-primary" disabled={!balanced || busy} title={balanced ? '' : 'Debits must equal credits'}>
             {busy ? 'Posting…' : 'Post voucher'}
+            <kbd className="ml-1 rounded bg-white/20 px-1 text-[10px] font-bold">Ctrl↵</kbd>
           </button>
         </div>
       </div>
     </form>
+    </>
   );
 }

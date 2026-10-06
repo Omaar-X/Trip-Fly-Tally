@@ -21,6 +21,9 @@ import hrRoutes from './modules/hr/hr.routes';
 import dashboardRoutes from './modules/dashboard/dashboard.routes';
 import adminDatabaseRoutes from './modules/adminDatabase/adminDatabase.routes';
 import companySettingsRoutes from './modules/companySettings/companySettings.routes';
+import approvalsRoutes from './modules/approvals/approvals.routes';
+import migrationRoutes from './modules/migration/migration.routes';
+import salesFilesRoutes from './modules/salesFiles/salesFiles.routes';
 
 export const app = express();
 
@@ -70,6 +73,9 @@ app.use('/api', accountingRoutes);            // /api/ledgers, /api/vouchers ...
 app.use('/api/reports', reportsRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/crm', crmRoutes);
+app.use('/api/approvals', approvalsRoutes);
+app.use('/api/migration', migrationRoutes);
+app.use('/api/sales-files', salesFilesRoutes);
 app.use('/api/bookings', bookingsRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api/invoices', invoicesRoutes);

@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, BookOpenText, Boxes, Users, Plane,
   BadgeDollarSign, BarChart3, Settings, Moon, Sun,
-  LogOut, Menu, X, ReceiptText, Wallet, Database,
+  LogOut, Menu, X, ReceiptText, Wallet, Database, ShieldCheck, ClipboardCheck,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -53,7 +53,9 @@ const NAV_GROUPS: { label: string; items: NavConfigItem[] }[] = [
   {
     label: 'System',
     items: [
+      { to: '/approvals', label: 'Approvals', icon: ShieldCheck, roles: [ROLE.ADMIN, ROLE.ACCOUNTANT, ROLE.SALES] },
       { to: '/reports',  label: 'Reports',  icon: BarChart3, roles: [ROLE.ADMIN, ROLE.ACCOUNTANT, ROLE.SALES] },
+      { to: '/historical-review', label: 'Historical Review', icon: ClipboardCheck, roles: [ROLE.CEO, ROLE.ADMIN, ROLE.ACCOUNTANT] },
       { to: '/database', label: 'Database', icon: Database, roles: [ROLE.CEO] },
       { to: '/settings', label: 'Settings', icon: Settings },
     ],

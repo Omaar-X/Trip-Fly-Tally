@@ -1,4 +1,4 @@
-import { ComponentType, ReactNode, useMemo, useState } from 'react';
+import { ComponentType, ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Search, X, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 import { bdt } from '../lib/format';
 
@@ -152,6 +152,271 @@ export function Field({ label, children, hint }: { label: string; children: Reac
       {children}
       {hint && <span className="mt-1.5 block text-xs text-slate-400 dark:text-slate-500">{hint}</span>}
     </label>
+  );
+}
+
+// ───────────────────────────── SearchSelect ─────────────────────────────────
+
+export interface SearchOption {
+  value: string | number;
+  label: string;
+  /** Secondary text — a ledger's group, an item's stock, an invoice's due. */
+  hint?: string;
+}
+
+/**
+ * A picker you type into instead of scroll through.
+ *
+ * A native <select> is fine for eight voucher types and unusable for three
+ * hundred ledgers, which is what a book with real history carries. Anyone who
+ * has worked in Tally expects to type "cit" and land on City Bank rather than
+ * hunt an alphabetical list with the mouse — so the keyboard drives everything
+ * here: type to narrow, arrows to move, Enter to take, Escape to back out.
+ *
+ * The list is capped while rendering. Past the cap the answer is not a longer
+ * list, it is another letter typed.
+ */
+const MAX_VISIBLE = 50;
+
+export function SearchSelect({
+  value, onChange, options, placeholder = 'Search…', disabled, required, className = '', ariaLabel,
+  emptyLabel, loadOptions, selectedOption, debounceMs = 300, pageSize = 25, footer,
+}: {
+  value: string | number | '';
+  onChange: (value: string) => void;
+  /** The whole list, for sets small enough to hold — ledgers, items, banks. */
+  options?: SearchOption[];
+  placeholder?: string;
+  disabled?: boolean;
+  required?: boolean;
+  className?: string;
+  ariaLabel?: string;
+  /**
+   * Wording for "nothing chosen" on an optional field ("None", "On account").
+   * Without it the control has no way back to empty once a row is taken, which
+   * is exactly the trap a <select> with a blank first option avoids.
+   */
+  emptyLabel?: string;
+  /**
+   * Server-side mode. Given instead of `options` when the set is too large to
+   * ship to the browser — customers and suppliers, once the history is in.
+   * Called on open and then debounced per keystroke.
+   */
+  loadOptions?: (query: string, signal: AbortSignal) => Promise<SearchOption[]>;
+  /**
+   * The chosen row, in server mode. The results list holds only what the last
+   * query returned, so without this the control would forget the label of a
+   * selection the moment the user types something that does not match it.
+   */
+  selectedOption?: SearchOption | null;
+  debounceMs?: number;
+  /**
+   * How many rows `loadOptions` asks the server for. Used only to tell a full
+   * page apart from an exhausted one, so the "keep typing" hint is honest.
+   */
+  pageSize?: number;
+  /** Rendered under the results — this is where "+ Add New" lives. */
+  footer?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const [remote, setRemote] = useState<SearchOption[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const listId = useId();
+
+  const server = Boolean(loadOptions);
+
+  const all = useMemo<SearchOption[]>(() => {
+    const base = server ? remote : (options ?? []);
+    return emptyLabel ? [{ value: '', label: emptyLabel }, ...base] : base;
+  }, [server, remote, options, emptyLabel]);
+
+  const selected = useMemo(() => {
+    if (String(value) === '') return emptyLabel ? { value: '', label: emptyLabel } : null;
+    // In server mode the parent is the only reliable holder of the label.
+    if (server) return selectedOption ?? all.find((o) => String(o.value) === String(value)) ?? null;
+    return all.find((o) => String(o.value) === String(value)) ?? null;
+  }, [server, selectedOption, all, value, emptyLabel]);
+
+  /**
+   * Debounced fetch. Every run aborts the one before it, so a fast typist
+   * cannot have an early, broader response land after a later, narrower one
+   * and repopulate the list with the wrong rows.
+   */
+  useEffect(() => {
+    if (!loadOptions || !open) return;
+    const controller = new AbortController();
+    setLoading(true);
+    const timer = setTimeout(() => {
+      loadOptions(query.trim(), controller.signal)
+        .then((rows) => { setRemote(rows); setFailed(false); })
+        .catch((err) => { if (!controller.signal.aborted) { setRemote([]); setFailed(true); } })
+        .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    }, query.trim() ? debounceMs : 0);   // opening the box should not feel delayed
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [loadOptions, open, query, debounceMs]);
+
+  const matches = useMemo(() => {
+    // The server already filtered; filtering again would hide rows it matched
+    // on a field the browser cannot see, such as a phone number.
+    if (server) return all;
+    const q = query.trim().toLowerCase();
+    if (!q) return all;
+    // Hint is searched too: "bank" should find a ledger by its group even when
+    // the ledger's own name never says so.
+    return all.filter((o) =>
+      o.label.toLowerCase().includes(q) || (o.hint?.toLowerCase().includes(q) ?? false));
+  }, [server, all, query]);
+
+  const shown = matches.slice(0, MAX_VISIBLE);
+
+  // Keep the highlight on a row that still exists after each keystroke.
+  useEffect(() => { setActive(0); }, [query]);
+
+  // Follow the highlight when it moves past the visible edge of the list.
+  useEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector<HTMLLIElement>(`[data-idx="${active}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [active, open]);
+
+  const close = () => { setOpen(false); setQuery(''); };
+
+  const pick = (option: SearchOption) => {
+    onChange(String(option.value));
+    close();
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!open) { setOpen(true); return; }
+      setActive((i) => {
+        const next = e.key === 'ArrowDown' ? i + 1 : i - 1;
+        return Math.max(0, Math.min(shown.length - 1, next));
+      });
+      return;
+    }
+    if (e.key === 'Enter') {
+      // Only swallow Enter when it has a row to take — otherwise the form's
+      // own submit must still work from inside this field.
+      if (open && shown[active]) { e.preventDefault(); pick(shown[active]); }
+      return;
+    }
+    if (e.key === 'Escape') { if (open) { e.stopPropagation(); close(); } return; }
+    if (e.key === 'Tab') close();
+  };
+
+  return (
+    <div
+      ref={boxRef}
+      className={`relative ${className}`}
+      // Closing on focus leaving the whole control — rather than on the
+      // input's own blur — is what lets a click land on an option first.
+      onBlur={(e) => { if (!boxRef.current?.contains(e.relatedTarget as Node | null)) close(); }}
+    >
+      <input
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-label={ariaLabel}
+        className="input !py-1.5 pr-8"
+        disabled={disabled}
+        required={required}
+        placeholder={placeholder}
+        // Closed, the field reads as the chosen row; open, it is the search box.
+        value={open ? query : (selected?.label ?? '')}
+        onChange={(e) => { setQuery(e.target.value); if (!open) setOpen(true); }}
+        onFocus={(e) => { setOpen(true); setQuery(''); e.target.select(); }}
+        onKeyDown={onKeyDown}
+      />
+      {/* Clearing is its own button rather than only the emptyLabel row: on a
+          required field there is no empty row to pick, and a user who chose
+          the wrong customer still needs a way back without reloading. */}
+      {String(value) !== '' && !disabled ? (
+        <button
+          type="button"
+          aria-label={ariaLabel ? `Clear ${ariaLabel}` : 'Clear selection'}
+          onMouseDown={(e) => { e.preventDefault(); onChange(''); close(); }}
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      ) : (
+        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400">
+          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                   : open ? <Search className="h-3.5 w-3.5" />
+                          : <ChevronDown className="h-3.5 w-3.5" />}
+        </span>
+      )}
+
+      {open && (
+        <ul
+          ref={listRef}
+          id={listId}
+          role="listbox"
+          className="absolute z-30 mt-1 max-h-60 w-full overflow-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800"
+        >
+          {shown.map((o, i) => (
+            <li
+              key={o.value}
+              data-idx={i}
+              role="option"
+              aria-selected={String(o.value) === String(value)}
+              // mousedown, not click: the press must not blur the input and
+              // close the list out from under the pointer.
+              onMouseDown={(e) => { e.preventDefault(); pick(o); }}
+              onMouseEnter={() => setActive(i)}
+              className={`flex cursor-pointer items-baseline justify-between gap-2 px-3 py-1.5 text-sm ${
+                i === active ? 'bg-brand-50 text-brand-900 dark:bg-brand-950/60 dark:text-brand-100'
+                             : 'text-slate-700 dark:text-slate-200'}`}
+            >
+              <span className="truncate">{o.label}</span>
+              {o.hint && <span className="shrink-0 text-xs text-slate-400 dark:text-slate-500">{o.hint}</span>}
+            </li>
+          ))}
+
+          {/* Three different empty states, because they call for three
+              different actions: wait, retry, or type something else. */}
+          {!shown.length && loading && (
+            <li className="flex items-center gap-2 px-3 py-2 text-sm text-slate-400">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Searching…
+            </li>
+          )}
+          {!shown.length && !loading && failed && (
+            <li className="px-3 py-2 text-sm text-rose-500">Search failed — check the connection.</li>
+          )}
+          {!shown.length && !loading && !failed && (
+            <li className="px-3 py-2 text-sm text-slate-400">
+              {query.trim() ? `No match for “${query}”` : 'Nothing to choose from yet'}
+            </li>
+          )}
+
+          {matches.length > shown.length && (
+            <li className="border-t border-slate-100 px-3 py-1.5 text-xs text-slate-400 dark:border-slate-700">
+              {matches.length - shown.length} more — keep typing to narrow
+            </li>
+          )}
+          {/* Server mode cannot say how many more there are, only that the page
+              was full — which is the same signal to the person typing. */}
+          {server && !loading && remote.length >= pageSize && (
+            <li className="border-t border-slate-100 px-3 py-1.5 text-xs text-slate-400 dark:border-slate-700">
+              More matches — keep typing to narrow
+            </li>
+          )}
+
+          {footer && (
+            <li className="border-t border-slate-100 dark:border-slate-700">{footer}</li>
+          )}
+        </ul>
+      )}
+    </div>
   );
 }
 

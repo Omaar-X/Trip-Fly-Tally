@@ -30,6 +30,18 @@ export interface CreateBookingInput {
   salePrice: number;                   // billed to customer
   supplierId?: number;
   agentId?: number;                    // selling employee → commission
+  /**
+   * Only the historical importer passes this, and only as 'CONFIRMED'.
+   *
+   * A booking raised today is PENDING until `confirm()` runs, because
+   * confirming is what raises the invoice and posts the vouchers. A ticket
+   * read out of a 2024 sales sheet was issued, flown and settled years ago —
+   * leaving it PENDING would describe it as awaiting an issue that already
+   * happened. So the importer states the status directly, and posts nothing:
+   * see the note on `raiseBookings` in salesFiles.service.ts for why no
+   * invoice or voucher may be created for these.
+   */
+  status?: 'PENDING' | 'CONFIRMED';
 }
 
 export interface ConfirmBookingInput {
@@ -106,24 +118,41 @@ export const bookingsService = {
   },
 
   async create(companyId: number, userId: number, input: CreateBookingInput) {
+    return withTransaction((conn) => bookingsService.createTx(conn, companyId, userId, input));
+  },
+
+  /**
+   * The same insert, on a caller-supplied connection.
+   *
+   * Split out for the historical sales-file importer, which raises a few
+   * thousand bookings in one go: giving each its own transaction would take a
+   * separate round trip to the booking counter per ticket and leave a
+   * half-imported sheet behind if the run died in the middle. One sheet, one
+   * transaction — and the numbering, validation and column list stay in this
+   * one place rather than being copied into the importer.
+   */
+  async createTx(
+    conn: PoolConnection, companyId: number, userId: number, input: CreateBookingInput
+  ) {
     if (input.salePrice < 0 || input.costPrice < 0)
       throw ApiError.badRequest('Prices cannot be negative');
-    return withTransaction(async (conn) => {
-      const policy = await loadBooksPolicyTx(conn, companyId);
-      await assertCustomer(conn, companyId, input.customerId);
-      // A booking is not a posting, so it is numbered against the financial
-      // year it is RAISED in — the accounting date only appears on confirm.
-      const bookingNo = await nextDocNo(
-        conn, companyId, 'BOOKING', financialYearOf(today(), policy.fyStartMonth));
-      const [res] = await conn.query<WriteResult>(
-        `INSERT INTO bookings (company_id, booking_no, customer_id, booking_type, travel_date,
-                               return_date, details, cost_price, sale_price, supplier_id, agent_id, created_by)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [companyId, bookingNo, input.customerId, input.bookingType, input.travelDate ?? null,
-         input.returnDate ?? null, JSON.stringify(input.details ?? {}), round2(input.costPrice),
-         round2(input.salePrice), input.supplierId ?? null, input.agentId ?? null, userId]);
-      return { id: res.insertId, bookingNo, status: 'PENDING' };
-    });
+    const status = input.status ?? 'PENDING';
+    const policy = await loadBooksPolicyTx(conn, companyId);
+    await assertCustomer(conn, companyId, input.customerId);
+    // A booking is not a posting, so it is numbered against the financial
+    // year it is RAISED in — the accounting date only appears on confirm.
+    const bookingNo = await nextDocNo(
+      conn, companyId, 'BOOKING', financialYearOf(today(), policy.fyStartMonth));
+    const [res] = await conn.query<WriteResult>(
+      `INSERT INTO bookings (company_id, booking_no, customer_id, booking_type, travel_date,
+                             return_date, details, cost_price, sale_price, supplier_id, agent_id,
+                             status, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [companyId, bookingNo, input.customerId, input.bookingType, input.travelDate ?? null,
+       input.returnDate ?? null, JSON.stringify(input.details ?? {}), round2(input.costPrice),
+       round2(input.salePrice), input.supplierId ?? null, input.agentId ?? null,
+       status, userId]);
+    return { id: res.insertId, bookingNo, status };
   },
 
   /**

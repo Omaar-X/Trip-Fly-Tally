@@ -1,5 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
-import { apiErrorMessage } from '../../src/api/client';
+import { AxiosError } from 'axios';
+import { api, apiErrorMessage, setTokens, storage } from '../../src/api/client';
+
+describe('expired session', () => {
+  it('clears cached identity without reloading the login page on a 401', async () => {
+    window.history.replaceState({}, '', '/login');
+    setTokens('expired-access', null);
+    storage.set('tf_user', JSON.stringify({ id: 1 }));
+    await expect(api.get('/api/company-settings', {
+      adapter: async (config) => {
+        throw new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, undefined, {
+          status: 401, statusText: 'Unauthorized', data: {}, headers: {}, config,
+        });
+      },
+    })).rejects.toThrow('Unauthorized');
+    expect(storage.get('tf_access')).toBeNull();
+    expect(storage.get('tf_refresh')).toBeNull();
+    expect(storage.get('tf_user')).toBeNull();
+    expect(window.location.pathname).toBe('/login');
+  });
+});
 
 describe('apiErrorMessage', () => {
   it('explains an unreachable server instead of exposing Network Error', () => {

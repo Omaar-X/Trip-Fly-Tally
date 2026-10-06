@@ -16,6 +16,10 @@ export const useAuth = () => useContext(Ctx);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(() => {
     const raw = storage.get('tf_user');
+    if (!storage.get('tf_access')) {
+      storage.remove('tf_user');
+      return null;
+    }
     if (!raw) return null;
     try { return JSON.parse(raw) as User; }
     catch {
@@ -34,7 +38,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(data.data);
           storage.set('tf_user', JSON.stringify(data.data));
         }
-      } catch { /* interceptor handles refresh / redirect */ }
+      } catch (error) {
+        if ((error as { response?: { status?: number } }).response?.status === 401) {
+          setTokens(null, null);
+          storage.remove('tf_user');
+          setUser(null);
+        }
+      }
       finally { setLoading(false); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,6 +1,6 @@
 import axios, { AxiosError } from 'axios';
 
-const baseURL = (import.meta.env.VITE_API_URL || '').trim().replace(/\/$/, '');
+const baseURL = (import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || '').trim().replace(/\/$/, '');
 export const api = axios.create({ baseURL, timeout: 30000 });
 
 /** Storage can be unavailable in privacy-mode/embedded browser contexts. */
